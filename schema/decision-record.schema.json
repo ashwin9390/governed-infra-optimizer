@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Decision record (dr/0.1)",
+  "description": "Applies to the 'data' field of each ledger entry. A ledger entry is {ts, prev, data, hash, sig?}: hash = SHA-256 over {ts, prev, data}; sig = optional HMAC-SHA256 of hash.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/decision"
+    },
+    {
+      "$ref": "#/$defs/reconciliation"
+    }
+  ],
+  "$defs": {
+    "decision": {
+      "type": "object",
+      "required": [
+        "schema",
+        "kind",
+        "id",
+        "resource",
+        "owner",
+        "action",
+        "domain",
+        "verdict",
+        "reasons",
+        "predicted",
+        "outcome"
+      ],
+      "properties": {
+        "schema": {
+          "const": "dr/0.1"
+        },
+        "kind": {
+          "const": "decision"
+        },
+        "id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resource": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "domain": {
+          "enum": [
+            "clear",
+            "complicated",
+            "complex"
+          ]
+        },
+        "verdict": {
+          "enum": [
+            "auto",
+            "needs_approval",
+            "recommend",
+            "blocked",
+            "shadow"
+          ]
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "predicted": {
+          "type": "object",
+          "required": [
+            "d_cost",
+            "d_co2",
+            "slo_risk"
+          ],
+          "properties": {
+            "d_cost": {
+              "type": "number"
+            },
+            "d_co2": {
+              "type": "number"
+            },
+            "slo_risk": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "d_co2_range": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "approved_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "enum": [
+            "applied",
+            "rolled_back",
+            "not_applied",
+            "shadow"
+          ]
+        },
+        "cause": {
+          "type": "string"
+        },
+        "pred_error": {
+          "type": "number"
+        },
+        "realized": {
+          "type": "object",
+          "properties": {
+            "d_cost": {
+              "type": "number"
+            },
+            "d_co2": {
+              "type": "number"
+            }
+          }
+        },
+        "tickets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "explanation": {
+          "type": "object",
+          "description": "Plain-language summary of the decision (optional).",
+          "properties": {
+            "summary": {
+              "type": "string"
+            },
+            "why": {
+              "type": "string"
+            },
+            "risk": {
+              "type": "string"
+            },
+            "rollback": {
+              "type": "string"
+            },
+            "next_step": {
+              "type": "string"
+            },
+            "runbook": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "summary",
+            "why",
+            "risk",
+            "rollback",
+            "next_step"
+          ]
+        },
+        "escalate_to": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Named experts who may approve this change (from expert policy packs)."
+        }
+      }
+    },
+    "reconciliation": {
+      "type": "object",
+      "required": [
+        "schema",
+        "kind",
+        "decision_id",
+        "action",
+        "predicted_d_cost",
+        "realized_d_cost",
+        "pred_error",
+        "clean"
+      ],
+      "properties": {
+        "schema": {
+          "const": "dr/0.1"
+        },
+        "kind": {
+          "const": "reconciliation"
+        },
+        "decision_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resource": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "predicted_d_cost": {
+          "type": "number"
+        },
+        "realized_d_cost": {
+          "type": "number"
+        },
+        "realized_d_co2": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pred_error": {
+          "type": "number"
+        },
+        "clean": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

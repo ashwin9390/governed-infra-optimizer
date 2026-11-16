@@ -1,0 +1,35 @@
+[
+  {
+    "resource_id": "vol-old-7",
+    "action": "delete_idle_volume",
+    "domain": "clear",
+    "d_cost": -40,
+    "d_co2": -2,
+    "slo_risk": 0.0,
+    "observed_d_cost": -40
+  },
+  {
+    "resource_id": "web-api",
+    "action": "rightsize_instances",
+    "domain": "complicated",
+    "d_cost": -120,
+    "d_co2": -4,
+    "slo_risk": 0.05,
+    "observed_d_cost": -110,
+    "approved_by": "alice"
+  },
+  {
+    "resource_id": "batch-etl",
+    "action": "shift_to_green_window",
+    "domain": "complicated",
+    "d_cost": 3,
+    "d_co2": -9,
+    "slo_risk": 0.05,
+    "co2_range": [
+      -12,
+      -6
+    ],
+    "observed_d_cost": 3,
+    "approved_by": "bob"
+  }
+]

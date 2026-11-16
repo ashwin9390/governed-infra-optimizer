@@ -1,0 +1,9 @@
+{
+  "allowed_regions": [
+    "eu-west",
+    "in-south"
+  ],
+  "carbon_price_per_kg": 2.0,
+  "max_changes_per_window": 10,
+  "promote_after": 3
+}

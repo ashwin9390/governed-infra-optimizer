@@ -1,0 +1,29 @@
+[
+  {
+    "id": "vol-old-7",
+    "owner": "platform",
+    "region": "eu-west",
+    "monthly_cost": 40,
+    "monthly_kg_co2": 2,
+    "slo_headroom": 0.6,
+    "stateful": false
+  },
+  {
+    "id": "web-api",
+    "owner": "payments",
+    "region": "eu-west",
+    "monthly_cost": 500,
+    "monthly_kg_co2": 20,
+    "slo_headroom": 0.5,
+    "stateful": false
+  },
+  {
+    "id": "batch-etl",
+    "owner": "data",
+    "region": "eu-west",
+    "monthly_cost": 300,
+    "monthly_kg_co2": 25,
+    "slo_headroom": 0.7,
+    "stateful": false
+  }
+]

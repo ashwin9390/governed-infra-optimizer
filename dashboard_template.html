@@ -1,0 +1,54 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Governed Infra Optimizer</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#14202b;--mut:#5b6b7a;--ok:#1a7f4b;--bad:#b3261e;--warn:#a15c00;--line:#e2e6ea;--acc:#0b5fff}
+@media(prefers-color-scheme:dark){:root{--bg:#0d141b;--card:#15202b;--ink:#e8eef3;--mut:#93a4b3;--ok:#4cc38a;--bad:#ff7b72;--warn:#e3a008;--line:#25323f;--acc:#6ea8ff}}
+*{box-sizing:border-box}body{margin:0 auto;max-width:980px;padding:16px;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+h1{font-size:20px;margin:0 0 2px}.sub{color:var(--mut);margin:0 0 14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.k{font-size:12px;color:var(--mut)}.v{font-size:22px;font-weight:650}
+.tabs{display:flex;gap:6px;margin:6px 0 10px}.tabs button{flex:1;padding:9px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);font:inherit;cursor:pointer}
+.tabs button.on{border-color:var(--acc);color:var(--acc);font-weight:650}
+.scroll{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:13px}th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+.pill{padding:2px 8px;border-radius:99px;font-size:12px;border:1px solid currentColor}
+details{margin-top:8px;border-top:1px solid var(--line);padding-top:6px}summary{cursor:pointer;font-weight:600}.ex p{margin:4px 0;font-size:13px}.ex b{color:var(--mut);font-weight:600}
+.applied{color:var(--ok)}.rolled_back{color:var(--bad)}.not_applied{color:var(--warn)}.shadow{color:var(--acc)}
+.row{display:flex;justify-content:space-between;gap:8px;padding:6px 0;border-bottom:1px solid var(--line)}p{margin:6px 0}
+</style></head><body>
+<h1>Governed Infra Optimizer</h1>
+<p class="sub">Every change: predicted vs realized cost, carbon, SLO, security, approval and recovery in one signed record.</p>
+<div class="grid" id="kpis"></div>
+<div class="tabs"><button data-t="why" class="on">Why</button><button data-t="how">How</button><button data-t="what">What</button></div>
+<div class="card" id="view"></div>
+<div class="grid" style="margin-top:14px"><div class="card" id="learn"></div><div class="card" id="tix"></div></div>
+<script>
+const D=__DATA__;
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ALL=D.records.map(r=>r.data), R=ALL.filter(r=>r.kind!=="reconciliation"), REC=ALL.filter(r=>r.kind==="reconciliation"), A=R.filter(r=>r.outcome==="applied");
+const sum=(a,f)=>a.reduce((s,x)=>s+f(x),0);
+const saved=-sum(A,r=>r.realized.d_cost), co2=-sum(A,r=>r.realized.d_co2), pred=-sum(A,r=>r.predicted.d_cost);
+const rolled=R.filter(r=>r.outcome==="rolled_back").length, held=R.filter(r=>r.outcome==="not_applied").length;
+const kp=(k,v,c="")=>`<div class="card"><div class="k">${k}</div><div class="v ${c}">${v}</div></div>`;
+document.getElementById("kpis").innerHTML=
+ kp("Net saving / month","₹"+saved.toFixed(0),"applied")+kp("CO₂ avoided / month",co2.toFixed(1)+" kg","applied")+
+ kp("Auto-recovered",rolled,"rolled_back")+kp("Held / blocked",held,"not_applied")+kp("Shadow accuracy",REC.length?Math.round(100*REC.filter(x=>x.clean).length/REC.length)+"%":"–","shadow")+
+ kp("Ledger integrity",D.chain_ok?"Intact":"TAMPERED",D.chain_ok?"applied":"rolled_back");
+const pill=o=>`<span class="pill ${esc(o)}">${esc(o.replace("_"," "))}</span>`;
+const views={
+ why:()=>`<p><b>₹${saved.toFixed(0)}</b> saved per month across <b>${A.length}</b> applied changes, with <b>${co2.toFixed(1)} kg</b> CO₂ avoided.</p>
+  <p>Predicted saving for the applied changes: ₹${pred.toFixed(0)}; realized: ₹${saved.toFixed(0)}. Unsafe changes were caught: ${rolled} rolled back, ${held} held or blocked.</p>`,
+ how:()=>{const m={};R.forEach(r=>{const k=r.verdict;(m[k]=m[k]||[]).push(r)});
+  return Object.entries(m).map(([k,v])=>`<div class="row"><span><b>${esc(k)}</b> (${v.length})</span><span class="k">${esc([...new Set(v.flatMap(r=>r.reasons))].join("; "))}</span></div>`).join("")},
+ what:()=>`<div class="scroll"><table><tr><th>Resource</th><th>Owner</th><th>Action</th><th>Verdict</th><th>Outcome</th><th>Pred ₹</th><th>Real ₹</th><th>Note</th></tr>`+
+  R.map(r=>`<tr><td>${esc(r.resource)}</td><td>${esc(r.owner)}</td><td>${esc(r.action)}</td><td>${esc(r.verdict)}</td><td>${pill(r.outcome)}</td><td>${r.predicted.d_cost}</td><td>${r.realized?r.realized.d_cost:"–"}</td><td>${esc(r.cause||(r.reasons[0].startsWith("earned")?"earned autonomy":r.approved_by)||"")}</td></tr>`).join("")+`</table></div><h3 style="font-size:15px;margin:14px 0 0">In plain language</h3>`+
+  R.filter(r=>r.explanation).map(r=>{const x=r.explanation;return `<details class="ex"><summary>${esc(r.action)} on ${esc(r.resource)} <span class="k">(${esc(r.outcome.replace("_"," "))})</span></summary><p>${esc(x.summary)}</p><p><b>Why:</b> ${esc(x.why)}</p><p><b>Risk:</b> ${esc(x.risk)}</p><p><b>Rollback:</b> ${esc(x.rollback)}</p><p><b>Next step:</b> ${esc(x.next_step)}</p>${x.runbook?`<p><b>Runbook:</b> ${esc(x.runbook)}</p>`:""}</details>`}).join("")};
+const show=t=>{document.getElementById("view").innerHTML=views[t]();document.querySelectorAll(".tabs button").forEach(b=>b.classList.toggle("on",b.dataset.t===t))};
+document.querySelectorAll(".tabs button").forEach(b=>b.onclick=()=>show(b.dataset.t));show("why");
+const b=D.baseline;
+document.getElementById("learn").innerHTML=`<div class="k">Learn switch</div><div class="v">${esc(D.mode)}</div>`+
+ Object.entries(D.flags).map(([k,v])=>`<div class="row"><span>${esc(k)}</span><span>${v?"learning":"off"}</span></div>`).join("")+
+ `<p class="k">${b?`Traffic baseline: mean ${b.mean.toFixed(0)}, p95 ${b.p95}, n=${b.n}`:"Cold start: no baseline yet"}</p>`;
+document.getElementById("tix").innerHTML=`<div class="k">Security tickets</div>`+(D.tickets.length?D.tickets.map(t=>`<div class="row"><span>${esc(t.id)} · ${esc(t.finding)}</span><span class="k">${esc(t.resource)} → ${esc(t.owner)}</span></div>`).join(""):"<p>None</p>");
+</script></body></html>

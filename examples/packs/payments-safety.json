@@ -1,0 +1,13 @@
+{
+  "name": "payments-safety",
+  "version": "1.0",
+  "author": "Example: a senior platform engineer. Edit to match your environment.",
+  "rules": [
+    {"id": "no-db-resize", "when": {"action": ["resize*", "downsize*"], "resource": "db-*"},
+     "effect": "block", "message": "Never resize databases through the optimizer; use the DBA change process."},
+    {"id": "delete-needs-sre", "when": {"action": "delete_*"},
+     "effect": "require_approval", "approvers": ["sre-lead"], "message": "Deletions need the SRE lead's sign-off."},
+    {"id": "big-change-review", "when": {"min_abs_cost": 500},
+     "effect": "require_approval", "approvers": ["finops-lead", "sre-lead"], "message": "Changes over 500/month need a lead's review."}
+  ]
+}
