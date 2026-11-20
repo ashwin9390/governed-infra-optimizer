@@ -8,9 +8,11 @@ def run():
            Resource("batch-etl", "data", "eu-west", 300, 25, 0.7),
            Resource("db-main", "payments", "eu-west", 900, 30, 0.4, stateful=True),
            Resource("cache-1", "platform", "eu-west", 120, 6, 0.6)]
-    pol = Policy({"eu-west", "in-south"}, carbon_price_per_kg=2.0, max_changes_per_window=10)
+    pol = Policy({"eu-west", "in-south"}, carbon_price_per_kg=2.0, max_changes_per_window=10,
+                 blast_approval_at=8, blast_block_at=15)
     c = SimConnector(slo_breaking={"downsize_aggressive"}, insecure={"open_public_endpoint"})
-    e = Engine(pol, c, res, mode=Mode.SHADOW, signing_key=b"demo-key-change-me")
+    e = Engine(pol, c, res, mode=Mode.SHADOW, signing_key=b"demo-key-change-me",
+               topology=Topology.from_file(pathlib.Path(__file__).parent / "examples" / "topology.json"))
     for v in (110, 125, 118, 140, 132, 127):
         e.observe("traffic", v)
     e.observe("payloads", 1)                      # ignored: payload learning is off

@@ -72,6 +72,10 @@ class Policy:
     carbon_price_per_kg: float = 0.0    # currency value of 1 kg CO2
     promote_after: int = 3              # clean applies before autonomy is earned
     max_pred_error: float = 0.25        # allowed |realized - predicted| / |predicted|
+    blast_approval_at: float = 3.0      # blast-radius score that needs a human approver
+    blast_block_at: float = 12.0        # blast-radius score that is blocked outright
+    max_map_age_days: int = 30          # older dependency data is treated as stale
+    blast_depth: int = 4                # how many hops of dependents to follow
 
     @classmethod
     def from_dict(cls, d: dict) -> "Policy":
@@ -163,12 +167,22 @@ def explain(rec: dict, runbook: str | None = None) -> dict:
              "rollback": ("Automatic: the previous state is saved before the change and restored if checks fail."
                           if out in ("applied", "rolled_back") else "Nothing has been changed yet."),
              "next_step": nxt}
+    b = rec.get("blast_radius")
+    if b:
+        if b["coverage"] == "unmapped":
+            out_d["blast_radius"] = "Unknown: this resource has no dependency map, so it is treated as high risk."
+        else:
+            n, k = len(b["affected"]), len(b["customer_facing"])
+            txt = f"Could affect {n} dependent(s)" + (f", {k} customer-facing" if k else "")
+            txt += (": " + ", ".join(b["affected"][:5]) + ("..." if n > 5 else "") + ".") if n else ". Nothing else is mapped as depending on it."
+            out_d["blast_radius"] = txt + (" The dependency map is stale." if b["coverage"] == "stale" else "")
     if runbook:
         out_d["runbook"] = runbook
     return out_d
 
 
-_WHEN_KEYS = {"action", "domain", "resource", "owner", "stateful", "region", "min_abs_cost"}
+_WHEN_KEYS = {"action", "domain", "resource", "owner", "stateful", "region", "min_abs_cost",
+              "min_blast_radius", "touches"}
 
 
 def validate_pack(pack: dict) -> None:
@@ -202,7 +216,7 @@ def _as_list(v):
     return [v] if isinstance(v, str) else list(v)
 
 
-def rule_matches(when: dict, p, r) -> bool:
+def rule_matches(when: dict, p, r, blast: dict | None = None) -> bool:
     """All listed conditions must hold (AND). Text conditions accept one value or a list; globs allowed."""
     if "action" in when and not any(fnmatch(p.action, g) for g in _as_list(when["action"])):
         return False
@@ -218,15 +232,55 @@ def rule_matches(when: dict, p, r) -> bool:
         return False
     if "min_abs_cost" in when and abs(p.d_cost) < when["min_abs_cost"]:
         return False
+    if "min_blast_radius" in when and (blast is None or blast["score"] < when["min_blast_radius"]):
+        return False
+    if "touches" in when and (blast is None or not any(
+            fnmatch(a, g) for a in blast["affected"] for g in _as_list(when["touches"]))):
+        return False
     return True
 
 
+@dataclass
+class Topology:
+    """Dependency map. Each edge is (dependent, dependency): 'dependent depends on dependency'.
+    nodes: id -> {customer_facing, criticality (1-3), mapped, source, age_days}. Supplied by you;
+    this prototype does not discover dependencies automatically."""
+    edges: set = field(default_factory=set)
+    nodes: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Topology":
+        edges = set()
+        for e in d.get("edges", []):
+            if len(e) != 2 or not all(isinstance(x, str) for x in e):
+                raise ValueError(f"edge must be [dependent, dependency]: {e}")
+            edges.add((e[0], e[1]))
+        return cls(edges=edges, nodes=dict(d.get("nodes", {})))
+
+    @classmethod
+    def from_file(cls, path) -> "Topology":
+        with open(path) as f:
+            return cls.from_dict(json.load(f))
+
+    def dependents(self, rid: str, max_depth: int = 4) -> dict:
+        """Everything that (transitively) depends on rid -> hops away. Cycle-safe."""
+        seen, frontier, depth = {}, {rid}, 0
+        while frontier and depth < max_depth:
+            depth += 1
+            nxt = {a for a, b in self.edges if b in frontier and a != rid and a not in seen}
+            for a in nxt:
+                seen[a] = depth
+            frontier = nxt
+        return seen
+
+
 class Engine:
-    def __init__(self, policy, connector, registry, mode=Mode.LEARN, ticketer=None, signing_key=None, runbooks=None):
+    def __init__(self, policy, connector, registry, mode=Mode.LEARN, ticketer=None, signing_key=None, runbooks=None, topology=None):
         self.policy, self.c, self.mode = policy, connector, mode
         self.registry = {r.id: r for r in registry}
         self.ledger = Ledger(signing_key)
         self.packs: list[dict] = []          # expert policy packs
+        self.topology = topology             # optional dependency map for blast radius
         self.runbooks = runbooks or {}       # action -> URL shown in explanations
         self._reconciled: set[int] = set()
         self.changes = 0
@@ -246,13 +300,37 @@ class Engine:
         with open(path) as f:
             return self.load_pack(json.load(f))
 
-    def _pack_hits(self, p, r):
+    def _pack_hits(self, p, r, blast=None):
         return [(f"{pk['name']}:{rule['id']}", rule) for pk in self.packs for rule in pk["rules"]
-                if rule_matches(rule["when"], p, r)]
+                if rule_matches(rule["when"], p, r, blast)]
 
     def _approvers(self, p, r) -> list[str]:
-        return sorted({a for _, rule in self._pack_hits(p, r) if rule["effect"] == "require_approval"
+        return sorted({a for _, rule in self._pack_hits(p, r, self.blast(r)) if rule["effect"] == "require_approval"
                        for a in rule.get("approvers", [])})
+
+    # ---- blast radius -----------------------------------------------------
+    def blast(self, r: Resource):
+        """Score how far a change to r could reach. None when no dependency map is configured.
+        score = dependents + 3 per customer-facing dependent + 2 per critical dependent
+                + 3 if r is customer-facing + 2 if r is critical."""
+        t = self.topology
+        if t is None:
+            return None
+        meta, pol = t.nodes.get(r.id), self.policy
+        deps = t.dependents(r.id, pol.blast_depth)
+        info = lambda i: t.nodes.get(i, {})
+        cust = sorted(d for d in deps if info(d).get("customer_facing"))
+        crit = sorted(d for d in deps if info(d).get("criticality", 1) >= 3)
+        score = len(deps) + 3 * len(cust) + 2 * len(crit)
+        if meta:
+            score += 3 * bool(meta.get("customer_facing")) + 2 * (meta.get("criticality", 1) >= 3)
+        coverage = "mapped"
+        if meta is None or meta.get("mapped") is False:
+            coverage = "unmapped"                     # unknown is treated as risky, never as zero
+        elif meta.get("age_days", 0) > pol.max_map_age_days:
+            coverage = "stale"
+        return {"score": score, "affected": sorted(deps), "customer_facing": cust,
+                "critical": crit, "coverage": coverage}
 
     # ---- learn switch -------------------------------------------------
     def observe(self, kind: str, value: float) -> bool:
@@ -287,7 +365,11 @@ class Engine:
         co2_worst = p.co2_range[1] if p.co2_range else p.d_co2      # conservative bound
         if -p.d_cost - pol.carbon_price_per_kg * co2_worst <= 0:
             return Verdict.BLOCKED, ["no net benefit (cost + priced carbon)"]
-        hits = self._pack_hits(p, r)
+        blast = self.blast(r)
+        if blast and blast["coverage"] != "unmapped" and blast["score"] >= pol.blast_block_at:
+            return Verdict.BLOCKED, [f"blast radius {blast['score']:g} exceeds the limit ({pol.blast_block_at:g}); "
+                                     "split the change or ask an expert"]
+        hits = self._pack_hits(p, r, blast)
         for key, rule in hits:                                      # expert block rules always win
             if rule["effect"] == "block":
                 return Verdict.BLOCKED, [f"[{key}] {rule['message']}"]
@@ -304,6 +386,15 @@ class Engine:
         for key, rule in hits:                                      # expert rules beat earned autonomy
             if rule["effect"] == "require_approval":
                 why.append(f"[{key}] {rule['message']}")
+        if blast:
+            if blast["coverage"] == "unmapped":
+                why.append("blast radius unknown: no dependency map for this resource (treated as high risk)")
+            else:
+                if blast["coverage"] == "stale":
+                    why.append("dependency map is stale; confirm dependents before applying")
+                if blast["score"] >= pol.blast_approval_at:
+                    why.append(f"blast radius {blast['score']:g}: could affect {len(blast['affected'])} "
+                               f"dependent(s), {len(blast['customer_facing'])} customer-facing")
         if self.changes >= pol.max_changes_per_window:
             why.append("change budget exhausted")
         if p.co2_range and p.d_co2 < 0 <= p.co2_range[1] and pol.carbon_price_per_kg > 0:
@@ -322,12 +413,15 @@ class Engine:
     def execute(self, p: Proposal, approved_by: str | None = None) -> dict:
         r = self.registry[p.resource_id]
         verdict, reasons = self.decide(p, r)
+        blast = self.blast(r)
         rec = {"schema": SCHEMA_VERSION, "kind": "decision", "id": len(self.ledger.records),
                "resource": r.id, "owner": r.owner, "action": p.action,
                "domain": p.domain.value, "verdict": verdict.value, "reasons": reasons,
                "predicted": {"d_cost": p.d_cost, "d_co2": p.d_co2, "slo_risk": p.slo_risk,
                              **({"d_co2_range": list(p.co2_range)} if p.co2_range else {})},
                "approved_by": approved_by}
+        if blast:
+            rec["blast_radius"] = blast
         need = self._approvers(p, r) if verdict == Verdict.NEEDS_APPROVAL else []
         if need:
             rec["escalate_to"] = need                               # named experts who may approve
@@ -607,7 +701,39 @@ def _selftest():
         except ValueError:
             pass
     assert all(not validate_record(x["data"]) for x in e.ledger.records) and e.ledger.verify()
-    print("all 19 checks passed")
+    # 20 blast radius: the dependency map limits autonomy; unknown is risky; stale needs approval
+    topo = Topology.from_dict({"nodes": {
+        "db-1": {"criticality": 3}, "api-1": {"customer_facing": True}, "web-1": {"customer_facing": True},
+        "batch-1": {}, "orphan-1": {}, "old-1": {"age_days": 90}},
+        "edges": [["api-1", "db-1"], ["batch-1", "db-1"], ["web-1", "api-1"]]})
+
+    def eng(**pk):
+        rs = [Resource(i, "team", "eu-west", 100, 5, 0.6) for i in ("db-1", "api-1", "orphan-1", "mystery-1", "old-1")]
+        return Engine(Policy({"eu-west"}, **pk), SimConnector(), rs, mode=Mode.ACTIVE, topology=topo)
+    cl = lambda rid: Proposal(rid, "tidy", Domain.CLEAR, -10, -1, 0.0)
+    d = eng().execute(cl("orphan-1"))["data"]
+    assert d["verdict"] == "auto" and d["blast_radius"]["score"] == 0
+    d = eng().execute(cl("db-1"))["data"]            # 3 dependents + 3*2 customer-facing + 2 (itself critical)
+    assert d["blast_radius"]["score"] == 11 and d["verdict"] == "needs_approval"
+    assert d["explanation"]["blast_radius"].startswith("Could affect 3 dependent(s), 2 customer-facing")
+    assert eng(blast_block_at=11).execute(cl("db-1"))["data"]["verdict"] == "blocked"
+    d = eng().execute(cl("mystery-1"))["data"]       # not in the map: unknown is high risk
+    assert d["verdict"] == "needs_approval" and "unknown" in d["reasons"][0]
+    d = eng().execute(cl("old-1"))["data"]           # stale map
+    assert d["verdict"] == "needs_approval" and "stale" in " ".join(d["reasons"])
+    # 21 expert rules can use the map; cycles are safe; no topology means no blast field
+    assert Topology.from_dict({"edges": [["a", "b"], ["b", "a"]]}).dependents("a") == {"b": 1}
+    e = eng()
+    e.load_pack({"name": "m", "version": "1", "rules": [
+        {"id": "web-lead", "when": {"touches": "web-*"}, "effect": "require_approval", "approvers": ["web-lead"], "message": "Web lead reviews anything that can reach web."},
+        {"id": "big", "when": {"min_blast_radius": 10}, "effect": "require_approval", "approvers": ["cto"], "message": "Large blast radius."}]})
+    assert e.execute(cl("api-1"))["data"]["escalate_to"] == ["web-lead"]
+    assert e.execute(cl("api-1"), approved_by="web-lead")["data"]["outcome"] == "applied"
+    assert e.execute(cl("db-1"))["data"]["escalate_to"] == ["cto", "web-lead"]
+    plain = Engine(Policy({"eu-west"}), SimConnector(), [Resource("x", "t", "eu-west", 10, 1)], mode=Mode.ACTIVE)
+    assert "blast_radius" not in plain.execute(cl("x"))["data"]
+    assert all(not validate_record(x["data"]) for x in e.ledger.records) and e.ledger.verify()
+    print("all 21 checks passed")
 
 
 if __name__ == "__main__":
