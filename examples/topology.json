@@ -1,0 +1,17 @@
+{
+  "_comment": "Edges are [dependent, dependency]: 'web-api' depends on 'db-main'. Replace with data from your IaC state, Kubernetes, tracing or service catalog.",
+  "nodes": {
+    "db-main":     {"criticality": 3, "source": "declared", "age_days": 3},
+    "web-api":     {"criticality": 2, "source": "observed", "age_days": 1},
+    "checkout-ui": {"customer_facing": true, "criticality": 3, "source": "observed", "age_days": 1},
+    "cache-1":     {"source": "declared", "age_days": 3},
+    "batch-etl":   {"source": "declared", "age_days": 3},
+    "vol-old-7":   {"source": "declared", "age_days": 3}
+  },
+  "edges": [
+    ["web-api", "db-main"],
+    ["web-api", "cache-1"],
+    ["checkout-ui", "web-api"],
+    ["batch-etl", "db-main"]
+  ]
+}
