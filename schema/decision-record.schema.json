@@ -171,6 +171,45 @@
             "type": "string"
           },
           "description": "Named experts who may approve this change (from expert policy packs)."
+        },
+        "blast_radius": {
+          "type": "object",
+          "description": "How far the change could reach, from the dependency map (optional).",
+          "properties": {
+            "score": {
+              "type": "number"
+            },
+            "affected": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "customer_facing": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "critical": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "coverage": {
+              "enum": [
+                "mapped",
+                "stale",
+                "unmapped"
+              ]
+            }
+          },
+          "required": [
+            "score",
+            "affected",
+            "coverage"
+          ]
         }
       }
     },
