@@ -25,6 +25,7 @@
 | Read a live AWS account (read-only) | `AwsReadOnlyConnector(ec2, cloudwatch, prices)` with your own boto3 clients; it proposes idle-instance stops and never writes to AWS |
 | Link runbooks | Pass `runbooks={action: url}` to `Engine`; each decision's plain-language explanation then links to it |
 | Encode expert rules | Write a policy pack (see `examples/packs/payments-safety.json`) and load it with `engine.load_pack_file(path)`. Rules can `block` or `require_approval` and name the experts who may approve |
+| Map what depends on what | Supply a dependency map (`examples/topology.json`) with `Engine(..., topology=Topology.from_file(path))` |
 | Support a new platform | Subclass `Connector` in `connectors.py` (5 methods) |
 | Add real SLO checks | Pass `probe_fn(resource) -> bool` to `InventoryConnector`, or implement `probe` |
 | Add security scans | Pass `scan_fn(resource) -> set of finding ids`; new findings roll the change back |
@@ -44,3 +45,13 @@ A pack is a JSON file a senior engineer writes once; everyone's changes are chec
 - Expert rules beat earned autonomy: an action with a clean record still waits for the named expert if a rule says so.
 - Typos fail loudly: unknown conditions, empty rules and bad effects are rejected when the pack loads.
 - Try it: `python examples/run_packs.py`
+
+## Blast radius
+Before any change, the engine asks: what else could this reach?
+- **Map format** (`examples/topology.json`): `edges` are `[dependent, dependency]`; `nodes` can set `customer_facing`, `criticality` (1-3), `source`, `age_days`, `mapped`.
+- **Where to get it:** infrastructure-as-code state, Kubernetes ownership and services, cloud config (security groups, IAM, DNS), distributed traces, your service catalog. Prefer observed over declared data when both exist.
+- **Score:** dependents + 3 per customer-facing dependent + 2 per critical dependent + 3 if the resource itself is customer-facing + 2 if critical.
+- **Policy knobs:** `blast_approval_at` (needs an approver), `blast_block_at` (blocked), `max_map_age_days` (staleness), `blast_depth` (hops followed).
+- **Unknown is risky:** a resource missing from the map needs approval and is labelled high risk; a stale map needs approval too.
+- **Packs:** rules can use `touches` (globs of affected services) and `min_blast_radius`.
+- Try it: `python examples/run_blast_radius.py`
